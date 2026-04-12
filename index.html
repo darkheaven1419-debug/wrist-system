@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <title>世界华人腕力协会比赛系统</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230ea5e9'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E💪%3C/text%3E%3C/svg%3E">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://unpkg.com/pinyin-pro@3.19.6/dist/index.js"></script>
+    <style>
+        * { user-select: none; box-sizing: border-box; }
+        body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #0a0a0f; }
+        .table-card { transition: all 0.2s; background: linear-gradient(145deg, #1e293b, #0f172a); }
+        .player-name { font-size: 1.5rem; font-weight: 800; }
+        .win-button { transition: all 0.2s ease; box-shadow: 0 10px 15px -3px rgba(0,212,255,0.4); }
+        .win-button:active { transform: scale(0.96); }
+        .loss-0 { color: #4ade80; font-weight: bold; }
+        .loss-1 { color: #facc15; font-weight: bold; }
+        .loss-2 { color: #f87171; text-decoration: line-through; }
+        .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #000; box-shadow: 0 0 20px rgba(251,191,36,0.6); }
+        .rank-2 { background: linear-gradient(135deg, #e2e8f0, #94a3b8); color: #000; box-shadow: 0 0 20px rgba(148,163,184,0.6); }
+        .rank-3 { background: linear-gradient(135deg, #cd9b6b, #b45309); color: #000; box-shadow: 0 0 20px rgba(205,155,107,0.6); }
+        .tournament-card, .division-card { cursor: pointer; transition: 0.2s; background: #1e293b; }
+        .tournament-card:hover, .division-card:hover { transform: translateY(-3px); background: #334155; }
+        .alert-modal { background: linear-gradient(135deg, #1f2937, #111827); border: 2px solid #f59e0b; }
+        button:disabled { opacity: 0.5; transform: none; cursor: not-allowed; }
+        .standing-item { transition: all 0.3s ease; }
+        [data-action] { cursor: pointer; }
+        /* 移动端优化 */
+        @media (max-width: 640px) {
+            .player-name { font-size: 1.2rem; }
+            .win-button { width: 5rem !important; height: 5rem !important; font-size: 1.2rem !important; }
+        }
+    </style>
+</head>
+<body class="text-white min-h-screen pb-20">
+    <!-- 顶部导航栏 -->
+    <div class="bg-black border-b border-zinc-800 sticky top-0 z-50">
+        <div class="max-w-screen-2xl mx-auto px-4 py-4 flex items-center justify-between flex-wrap gap-3">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-dumbbell text-4xl text-cyan-400"></i>
+                <div>
+                    <h1 class="text-2xl md:text-3xl font-bold tracking-tighter">世界华人腕力协会比赛系统</h1>
+                    <p class="text-xs text-zinc-500">开发者：张梓桐 | 严谨双败淘汰 · 多桌并行 · 智能裁判分配</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="back-button" class="hidden flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-5 py-3 rounded-3xl text-sm" data-action="goBack">
+                    <i class="fa-solid fa-arrow-left"></i> 返回
+                </button>
+                <div class="w-10 h-10 bg-zinc-800 rounded-2xl flex items-center justify-center text-xl hover:bg-zinc-700" data-action="showMenu">
+                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主内容容器 -->
+    <div id="app-root" class="max-w-screen-2xl mx-auto px-4 py-6"></div>
+
+    <!-- 模态框 - 通用提示 -->
+    <div id="alert-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-[10001] flex items-center justify-center" onclick="if(event.target===this)App.closeAlertModal()">
+        <div class="alert-modal bg-zinc-900 w-full max-w-md mx-4 rounded-3xl p-8 text-center">
+            <i class="fa-regular fa-bell text-5xl text-amber-400 mb-4"></i>
+            <h3 id="alert-title" class="text-2xl font-bold mb-2">提示</h3>
+            <p id="alert-message" class="text-zinc-300 mb-8 text-lg"></p>
+            <button onclick="App.closeAlertModal()" class="bg-amber-500 hover:bg-amber-400 text-black font-bold py-3 px-8 rounded-3xl text-lg">知道了</button>
+        </div>
+    </div>
+
+    <!-- BO3 决赛模态框 -->
+    <div id="bo3-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-[9999] flex items-center justify-center" onclick="if(event.target===this)App.hideBo3Modal()">
+        <div class="bg-zinc-900 w-full max-w-lg mx-4 rounded-3xl p-8 text-center border border-amber-500/30">
+            <h2 class="text-3xl font-bold mb-2">🏆 冠亚军决赛</h2>
+            <p class="text-emerald-400 mb-8">三局两胜 BO3</p>
+            <div id="bo3-players" class="flex justify-between items-center mb-8 text-3xl md:text-4xl font-bold"></div>
+            <div class="flex justify-center gap-12 mb-10">
+                <div><div id="bo3-score-p1" class="text-7xl font-mono text-cyan-400">0</div><div id="bo3-name-p1" class="text-sm text-zinc-400"></div></div>
+                <div class="text-4xl font-light text-zinc-600 self-end mb-4">VS</div>
+                <div><div id="bo3-score-p2" class="text-7xl font-mono text-amber-400">0</div><div id="bo3-name-p2" class="text-sm text-zinc-400"></div></div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <button data-action="bo3Win" data-side="1" class="bg-cyan-400 hover:bg-cyan-300 text-black font-black py-6 rounded-3xl text-2xl">左侧获胜</button>
+                <button data-action="bo3Win" data-side="2" class="bg-amber-400 hover:bg-yellow-500 text-black font-black py-6 rounded-3xl text-2xl">右侧获胜</button>
+            </div>
+            <button data-action="hideBo3Modal" class="mt-8 text-zinc-400 text-sm"><i class="fa-solid fa-rotate-left"></i> 返回</button>
+        </div>
+    </div>
+
+    <!-- 比赛历史模态框 -->
+    <div id="history-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-[9999] flex items-center justify-center" onclick="if(event.target===this)App.hideHistoryModal()">
+        <div class="bg-zinc-900 w-full max-w-3xl mx-4 rounded-3xl p-6 max-h-[80vh] overflow-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold"><i class="fa-solid fa-list-ul mr-2"></i>比赛历史记录</h2>
+                <button data-action="hideHistoryModal" class="text-zinc-400 hover:text-white text-xl"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div id="history-list" class="space-y-2"></div>
+            <div class="mt-4 flex justify-end">
+                <button data-action="exportHistory" class="bg-cyan-500 hover:bg-cyan-400 text-black px-6 py-2 rounded-2xl text-sm font-semibold"><i class="fa-solid fa-download"></i> 导出历史</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 手动分配模态框 -->
+    <div id="manual-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-[9999] flex items-center justify-center" onclick="if(event.target===this)App.hideManualModal()">
+        <div class="bg-zinc-900 w-full max-w-md mx-4 rounded-3xl p-6">
+            <h3 class="text-xl font-semibold mb-4">手动分配对阵</h3>
+            <div id="manual-pool-select" class="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto"></div>
+            <div class="mt-6 flex gap-3">
+                <button data-action="hideManualModal" class="flex-1 py-4 rounded-3xl border border-zinc-700">取消</button>
+                <button data-action="confirmManualAssign" id="manual-confirm-btn" class="flex-1 py-4 rounded-3xl bg-white text-black font-bold">确认上桌</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 裁判管理模态框 -->
+    <div id="referee-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-[10002] flex items-center justify-center" onclick="if(event.target===this)App.hideRefereeModal()">
+        <div class="bg-zinc-900 w-full max-w-4xl mx-4 rounded-3xl p-6 max-h-[85vh] overflow-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold"><i class="fa-solid fa-gavel mr-2"></i>裁判管理</h2>
+                <button data-action="hideRefereeModal" class="text-zinc-400 hover:text-white text-xl"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="mb-4">
+                <p class="text-zinc-400 text-sm mb-2">批量添加裁判（一行一个，格式：姓名,可做主裁(是/否),限制级别(逗号分隔)）</p>
+                <textarea id="referee-bulk-input" rows="4" class="w-full bg-black border border-zinc-700 rounded-2xl px-4 py-3 text-sm placeholder-zinc-500 focus:outline-none focus:border-cyan-400 resize-none" placeholder="张梓桐,是,左手75&#10;杨彦琪,否&#10;郁鑫,是,无差别"></textarea>
+                <div class="flex gap-2 mt-2">
+                    <button data-action="addBulkReferees" class="bg-cyan-400 text-black px-4 py-2 rounded-2xl text-sm font-semibold"><i class="fa-solid fa-plus"></i> 批量添加</button>
+                    <button data-action="resetDefaultReferees" class="bg-zinc-700 text-white px-4 py-2 rounded-2xl text-sm">重置为默认名单</button>
+                </div>
+            </div>
+            <div id="referee-list" class="space-y-2"></div>
+            <div class="mt-4 flex justify-end">
+                <button data-action="autoAssignRefereesForCurrent" class="bg-emerald-500 hover:bg-emerald-400 text-black px-6 py-2 rounded-2xl text-sm font-semibold mr-2"><i class="fa-solid fa-arrows-rotate"></i> 为当前级别自动分配裁判</button>
+                <button data-action="hideRefereeModal" class="bg-zinc-700 hover:bg-zinc-600 px-6 py-2 rounded-2xl text-sm">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部菜单 -->
+    <div id="menu-overlay" class="hidden fixed inset-0 bg-black/70 z-[10000] flex items-end" onclick="App.hideMenu()">
+        <div onclick="event.stopPropagation()" class="bg-zinc-900 w-full rounded-t-3xl p-6 space-y-4">
+            <button data-action="undoLastMatch" data-close-menu="true" class="w-full flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 py-5 rounded-3xl text-lg font-medium"><i class="fa-solid fa-rotate-left"></i> 撤回上一场（全局）</button>
+            <button data-action="showRefereeModal" data-close-menu="true" class="w-full flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 py-5 rounded-3xl text-lg font-medium"><i class="fa-solid fa-gavel"></i> 裁判管理</button>
+            <button data-action="exportData" data-close-menu="true" class="w-full flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 py-5 rounded-3xl text-lg font-medium"><i class="fa-solid fa-download"></i> 导出数据</button>
+            <button data-action="importDataPrompt" data-close-menu="true" class="w-full flex items-center justify-center gap-3 bg-zinc-800 hover:bg-zinc-700 py-5 rounded-3xl text-lg font-medium"><i class="fa-solid fa-upload"></i> 导入数据</button>
+            <button data-action="resetAllData" data-close-menu="true" class="w-full flex items-center justify-center gap-3 text-red-400 hover:bg-red-950 py-5 rounded-3xl text-lg font-medium"><i class="fa-solid fa-trash"></i> 清空全部数据</button>
+        </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="hidden fixed bottom-6 right-6 bg-emerald-600 text-white px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-3 z-[99999]"><i class="fa-solid fa-check-circle"></i><span id="toast-text"></span></div>
+
+    <!-- PWA 安装提示 -->
+    <div id="pwa-install-prompt" class="hidden fixed bottom-20 left-4 right-4 md:left-auto md:right-6 md:w-80 bg-zinc-800 border border-cyan-400 rounded-3xl p-4 shadow-2xl z-[10003]">
+        <div class="flex items-start gap-3">
+            <i class="fa-solid fa-download text-cyan-400 text-2xl"></i>
+            <div class="flex-1">
+                <p class="font-semibold">安装应用到桌面</p>
+                <p class="text-xs text-zinc-400">获得更好的全屏体验</p>
+            </div>
+            <button id="pwa-install-btn" class="bg-cyan-400 text-black px-4 py-1 rounded-full text-sm font-bold">安装</button>
+            <button onclick="document.getElementById('pwa-install-prompt').classList.add('hidden')" class="text-zinc-400"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+    <!-- 注册 Service Worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then(reg => {
+                    console.log('SW registered:', reg.scope);
+                }).catch(err => console.log('SW registration failed:', err));
+            });
+        }
+        // PWA 安装逻辑
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('pwa-install-prompt').classList.remove('hidden');
+        });
+        document.addEventListener('click', (e) => {
+            if (e.target.id === 'pwa-install-btn' && deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        console.log('User accepted the install prompt');
+                    }
+                    deferredPrompt = null;
+                    document.getElementById('pwa-install-prompt').classList.add('hidden');
+                });
+            }
+        });
+    </script>
+</body>
+</html>

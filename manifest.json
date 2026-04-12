@@ -1,0 +1,17 @@
+{
+  "name": "世界华人腕力协会比赛系统",
+  "short_name": "腕力赛",
+  "description": "严谨双败淘汰 · 多桌并行 · 智能裁判分配",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%230ea5e9'/%3E%3Ctext x='50' y='70' font-size='50' text-anchor='middle' fill='white'%3E💪%3C/text%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
