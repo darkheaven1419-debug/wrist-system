@@ -16,30 +16,151 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://unpkg.com/pinyin-pro@3.19.6/dist/index.js"></script>
     <style>
-        * { user-select: none; box-sizing: border-box; }
-        body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #0a0a0f; }
-        .table-card { transition: all 0.2s; background: linear-gradient(145deg, #1e293b, #0f172a); }
-        .player-name { font-size: 1.5rem; font-weight: 800; }
-        .win-button { transition: all 0.2s ease; box-shadow: 0 10px 15px -3px rgba(0,212,255,0.4); }
-        .win-button:active { transform: scale(0.96); }
-        .loss-0 { color: #4ade80; font-weight: bold; }
-        .loss-1 { color: #facc15; font-weight: bold; }
-        .loss-2 { color: #f87171; text-decoration: line-through; }
-        .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #000; box-shadow: 0 0 20px rgba(251,191,36,0.6); }
-        .rank-2 { background: linear-gradient(135deg, #e2e8f0, #94a3b8); color: #000; box-shadow: 0 0 20px rgba(148,163,184,0.6); }
-        .rank-3 { background: linear-gradient(135deg, #cd9b6b, #b45309); color: #000; box-shadow: 0 0 20px rgba(205,155,107,0.6); }
-        .tournament-card, .division-card { cursor: pointer; transition: 0.2s; background: #1e293b; }
-        .tournament-card:hover, .division-card:hover { transform: translateY(-3px); background: #334155; }
-        .alert-modal { background: linear-gradient(135deg, #1f2937, #111827); border: 2px solid #f59e0b; }
-        button:disabled { opacity: 0.5; transform: none; cursor: not-allowed; }
-        .standing-item { transition: all 0.3s ease; }
-        [data-action] { cursor: pointer; }
-        /* 移动端优化 */
-        @media (max-width: 640px) {
-            .player-name { font-size: 1.2rem; }
-            .win-button { width: 5rem !important; height: 5rem !important; font-size: 1.2rem !important; }
+    * { 
+        user-select: none; 
+        box-sizing: border-box; 
+    }
+    body { 
+        font-family: 'Noto Sans SC', system-ui, -apple-system, sans-serif; 
+        background: #0a0a0f; 
+        padding-bottom: env(safe-area-inset-bottom, 20px);
+    }
+    /* 让所有容器在小屏幕上占满宽度 */
+    .max-w-screen-2xl {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+    /* 桌子卡片优化 */
+    .table-card { 
+        transition: all 0.2s; 
+        background: linear-gradient(145deg, #1e293b, #0f172a); 
+        padding: 1rem !important;
+    }
+    /* 选手名字响应式 */
+    .player-name { 
+        font-size: clamp(1rem, 5vw, 1.5rem); 
+        font-weight: 800; 
+        word-break: break-word;
+    }
+    /* 获胜按钮响应式 */
+    .win-button { 
+        transition: all 0.2s ease; 
+        box-shadow: 0 8px 12px -3px rgba(0,212,255,0.4); 
+        width: clamp(70px, 20vw, 112px) !important;
+        height: clamp(70px, 20vw, 112px) !important;
+        font-size: clamp(1rem, 4vw, 1.5rem) !important;
+    }
+    .win-button:active { transform: scale(0.96); }
+    
+    /* 负场标签 */
+    .loss-0 { color: #4ade80; font-weight: bold; }
+    .loss-1 { color: #facc15; font-weight: bold; }
+    .loss-2 { color: #f87171; text-decoration: line-through; }
+    
+    /* 排名样式 */
+    .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #000; box-shadow: 0 0 20px rgba(251,191,36,0.6); }
+    .rank-2 { background: linear-gradient(135deg, #e2e8f0, #94a3b8); color: #000; box-shadow: 0 0 20px rgba(148,163,184,0.6); }
+    .rank-3 { background: linear-gradient(135deg, #cd9b6b, #b45309); color: #000; box-shadow: 0 0 20px rgba(205,155,107,0.6); }
+    
+    .tournament-card, .division-card { 
+        cursor: pointer; 
+        transition: 0.2s; 
+        background: #1e293b; 
+        padding: 1.25rem !important;
+    }
+    .tournament-card:hover, .division-card:hover { 
+        transform: translateY(-3px); 
+        background: #334155; 
+    }
+    
+    .alert-modal { 
+        background: linear-gradient(135deg, #1f2937, #111827); 
+        border: 2px solid #f59e0b; 
+    }
+    
+    button:disabled { opacity: 0.5; transform: none; cursor: not-allowed; }
+    
+    .standing-item { transition: all 0.3s ease; }
+    
+    [data-action] { cursor: pointer; }
+    
+    /* 移动端特定优化 */
+    @media (max-width: 640px) {
+        /* 左右两列布局强制改为单列 */
+        .flex-col.lg\:flex-row {
+            flex-direction: column !important;
         }
-    </style>
+        /* 左侧边栏在手机上不再固定定位，自然滚动 */
+        .lg\:w-80 {
+            width: 100% !important;
+            position: relative !important;
+            top: 0 !important;
+        }
+        /* 按钮内边距增大，方便手指点击 */
+        button, [data-action] {
+            min-height: 44px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+        }
+        /* 获胜按钮内的文字 */
+        .win-button {
+            font-size: 1.2rem !important;
+        }
+        /* 桌子容器从两列改为一列 */
+        #tables-container {
+            grid-template-columns: 1fr !important;
+        }
+        /* 排名面板里的选手信息换行 */
+        .standing-item {
+            flex-wrap: wrap;
+        }
+        .standing-item .flex-1 {
+            min-width: 120px;
+        }
+        /* 标题字号缩小 */
+        h1 {
+            font-size: 1.5rem !important;
+        }
+        h2 {
+            font-size: 1.3rem !important;
+        }
+        /* 历史记录弹窗全屏 */
+        #history-modal > div {
+            width: 95% !important;
+            margin: 0 auto;
+        }
+        /* 批量添加文本框高度 */
+        #bulk-input {
+            min-height: 100px;
+        }
+        /* 裁判显示信息换行 */
+        .table-card .text-xs.text-zinc-400.mb-2 {
+            white-space: normal !important;
+            word-break: break-word;
+        }
+    }
+    
+    /* 针对极小屏幕 (iPhone SE 等) */
+    @media (max-width: 375px) {
+        .win-button {
+            width: 60px !important;
+            height: 60px !important;
+        }
+        .player-name {
+            font-size: 0.9rem;
+        }
+    }
+    
+    /* 防止横向溢出 */
+    img, video, canvas, svg, iframe, embed, object {
+        max-width: 100%;
+        height: auto;
+    }
+    .overflow-x-auto {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+</style>
 </head>
 <body class="text-white min-h-screen pb-20">
     <!-- 顶部导航栏 -->

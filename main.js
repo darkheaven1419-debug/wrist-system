@@ -743,21 +743,22 @@ function renderMatchView() {
     const root = document.getElementById('app-root');
     root.innerHTML = `
         <div class="flex flex-col lg:flex-row gap-6">
-            <div class="w-full lg:w-80 flex-shrink-0 bg-zinc-900 rounded-3xl p-6 h-fit sticky top-24">
+            <!-- 左侧边栏（手机全宽，大屏固定宽度） -->
+            <div class="w-full lg:w-80 flex-shrink-0 bg-zinc-900 rounded-3xl p-4 md:p-6 h-fit">
                 <div class="flex justify-between items-baseline mb-4">
                     <div class="flex items-center gap-2">
-                        <h2 class="text-2xl font-bold" id="division-name-title">${escapeHtml(div.name)}</h2>
+                        <h2 class="text-xl md:text-2xl font-bold" id="division-name-title">${escapeHtml(div.name)}</h2>
                         <i class="fa-solid fa-pencil text-zinc-400 hover:text-white text-sm" data-action="editCurrentDivisionName"></i>
                     </div>
-                    <div data-action="clearCurrentDivision" class="text-xs flex items-center gap-1 text-red-400"><i class="fa-solid fa-trash"></i>清空本级别</div>
+                    <div data-action="clearCurrentDivision" class="text-xs flex items-center gap-1 text-red-400"><i class="fa-solid fa-trash"></i><span class="hidden sm:inline">清空本级别</span></div>
                 </div>
                 <div class="mb-6">
-                    <p class="text-zinc-400 text-sm mb-2"><i class="fa-solid fa-clipboard"></i> 批量添加选手（一行一个或逗号分隔）</p>
-                    <textarea id="bulk-input" rows="4" class="w-full bg-black border border-zinc-700 rounded-2xl px-4 py-3 text-lg placeholder-zinc-500 focus:outline-none focus:border-cyan-400 resize-none" placeholder="张三&#10;李四,王五&#10;赵六"></textarea>
-                    <button data-action="addBulkPlayers" class="mt-3 w-full bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-3xl text-lg"><i class="fa-solid fa-plus"></i>立即添加</button>
+                    <p class="text-zinc-400 text-sm mb-2"><i class="fa-solid fa-clipboard"></i> 批量添加选手</p>
+                    <textarea id="bulk-input" rows="3" class="w-full bg-black border border-zinc-700 rounded-2xl px-4 py-3 text-base placeholder-zinc-500 focus:outline-none focus:border-cyan-400 resize-none" placeholder="张三&#10;李四,王五&#10;赵六"></textarea>
+                    <button data-action="addBulkPlayers" class="mt-3 w-full bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-3xl text-lg"><i class="fa-solid fa-plus"></i> 立即添加</button>
                 </div>
-                <button data-action="startTournament" class="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-play"></i> 开始比赛</button>
-                <button data-action="randomSeeding" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-shuffle"></i> 随机抽签（打乱顺序）</button>
+                <button data-action="startTournament" class="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold py-4 rounded-3xl mb-4"><i class="fa-solid fa-play"></i> 开始比赛</button>
+                <button data-action="randomSeeding" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-shuffle"></i> 随机抽签</button>
                 <div class="mb-6">
                     <div class="flex justify-between text-sm text-zinc-400 mb-3"><span>全部选手 <span id="total-players">${div.players.length}</span>人</span></div>
                     <div id="mini-players-list" class="max-h-64 overflow-y-auto space-y-2 pr-2"></div>
@@ -767,24 +768,25 @@ function renderMatchView() {
                     <div id="pool-list" class="max-h-80 overflow-y-auto space-y-2 text-sm"></div>
                 </div>
             </div>
-            <div class="flex-1">
-                <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
-                    <div class="flex items-center gap-3">
-                        <h3 class="text-xl font-semibold">比赛桌子 <span class="text-sm font-normal text-zinc-400">(自动: ${state.numTables}桌)</span></h3>
-                        <button data-action="showHistoryModal" class="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-2xl text-sm flex items-center gap-2"><i class="fa-solid fa-list-ul"></i> 比赛历史</button>
-                        <button data-action="autoAssignRefereesForCurrent" class="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-2xl text-sm flex items-center gap-2"><i class="fa-solid fa-gavel"></i> 重新分配裁判</button>
+            <!-- 右侧主区域 -->
+            <div class="flex-1 min-w-0">
+                <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h3 class="text-lg md:text-xl font-semibold">比赛桌子 <span class="text-sm font-normal text-zinc-400">(自动: ${state.numTables}桌)</span></h3>
+                        <button data-action="showHistoryModal" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-2xl text-sm flex items-center gap-1"><i class="fa-solid fa-list-ul"></i> <span class="hidden sm:inline">比赛历史</span></button>
+                        <button data-action="autoAssignRefereesForCurrent" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-2xl text-sm flex items-center gap-1"><i class="fa-solid fa-gavel"></i> <span class="hidden sm:inline">重新分配裁判</span></button>
                     </div>
                     <div class="bg-zinc-800 rounded-2xl px-4 py-2 text-sm flex items-center gap-2">
                         <i class="fa-solid fa-chart-simple text-cyan-400"></i>
-                        <span>赛程进度</span>
-                        <div class="w-32 bg-zinc-700 rounded-full h-2 overflow-hidden">
+                        <span class="hidden sm:inline">进度</span>
+                        <div class="w-20 sm:w-32 bg-zinc-700 rounded-full h-2 overflow-hidden">
                             <div id="progress-bar" class="bg-cyan-400 h-full rounded-full" style="width: ${progress}%"></div>
                         </div>
                         <span id="progress-text" class="text-cyan-300 font-mono">${progress}%</span>
                     </div>
                 </div>
-                <div id="tables-container" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
-                <div class="mt-8 bg-zinc-900 rounded-3xl p-6">
+                <div id="tables-container" class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6"></div>
+                <div class="mt-8 bg-zinc-900 rounded-3xl p-4 md:p-6">
                     <h3 class="text-lg font-semibold mb-4"><i class="fa-solid fa-trophy text-yellow-400"></i> 完整排名</h3>
                     <div id="standings-list" class="space-y-2 max-h-[400px] overflow-y-auto pr-2"></div>
                 </div>
