@@ -10,28 +10,16 @@ let state = {
     currentTournamentId: null,
     currentDivisionId: null,
     view: 'tournaments',
-    numTables: 1,               // 初始值，之后完全由自动计算决定
-    referees: []                // 全局裁判池
+    numTables: 1,
+    multiMatchDivisions: []
 };
 
 let top8Alerted = false;
 let manualTableId = null;
 let manualSelected = [];
 
-// 默认裁判数据（根据你的要求）
-const DEFAULT_REFEREES = [
-    { id: 'ref1', name: '张梓桐', canChief: true, restrictions: ['左手75'] },
-    { id: 'ref2', name: '杨彦琪', canChief: false, restrictions: [] },
-    { id: 'ref3', name: '郁鑫', canChief: true, restrictions: ['无差别'] },
-    { id: 'ref4', name: '范宇骁', canChief: true, restrictions: ['无差别'] },
-    { id: 'ref5', name: '夏彬熇', canChief: true, restrictions: ['无差别'] },
-    { id: 'ref6', name: '李嘉豪', canChief: true, restrictions: ['无差别'] },
-    { id: 'ref7', name: '兆乙天', canChief: false, restrictions: ['左手75', '右手75', '右手85', '右手95'] },
-    { id: 'ref8', name: '彭彦博', canChief: false, restrictions: ['右手无差别'] },
-    { id: 'ref9', name: '王事显', canChief: false, restrictions: ['左手75', '右手75', '右手85'] },
-    { id: 'ref10', name: '李泽豪', canChief: false, restrictions: [] },
-    { id: 'ref11', name: '秦泽淼', canChief: true, restrictions: ['左手75', '右手75'] }
-];
+let multiSelectMode = false;
+let selectedDivisionIds = new Set();
 
 // ======================= 辅助函数 =======================
 function getCurrentTournament() { return state.tournaments.find(t => t.id === state.currentTournamentId); }
@@ -64,10 +52,9 @@ function load() {
     const raw = localStorage.getItem('wristPower_final');
     if (raw) {
         state = JSON.parse(raw);
-        // 兼容旧数据
         if (!state.numTables) state.numTables = 1;
         if (!state.view) state.view = 'tournaments';
-        if (!state.referees || state.referees.length === 0) state.referees = DEFAULT_REFEREES;
+        if (!state.multiMatchDivisions) state.multiMatchDivisions = [];
         state.tournaments.forEach(t => {
             t.divisions.forEach(div => {
                 if (!div.players) div.players = [];
@@ -79,7 +66,7 @@ function load() {
                 if (!div.history) div.history = [];
                 if (!div.matchHistory) div.matchHistory = [];
                 if (!div.eliminatedOrder) div.eliminatedOrder = [];
-                if (!div.refereeAssignments) div.refereeAssignments = [];
+                if (div.maxTables === undefined) div.maxTables = 3;
                 div.players.forEach(p => { if (!p.pinyin) p.pinyin = getPinyin(p.name); });
                 div.tables.forEach(tb => { if (tb.lastMatch === undefined) tb.lastMatch = null; });
             });
@@ -89,7 +76,6 @@ function load() {
         state.tournaments = [defaultTournament];
         state.currentTournamentId = defaultTournament.id;
         state.view = 'tournaments';
-        state.referees = DEFAULT_REFEREES;
     }
     syncTablesForCurrentDivision();
     updateBackButton();
@@ -105,20 +91,22 @@ function updateBackButton() {
 
 function getProgress(div) {
     if (!div.players.length) return 0;
+    if (div.players.some(p => p.rank === 1)) return 100;
     const totalMatches = 2 * div.players.length - 1;
     const completed = div.matchHistory ? div.matchHistory.length : 0;
     return totalMatches > 0 ? Math.min(100, Math.floor((completed / totalMatches) * 100)) : 0;
 }
 
-// ======================= 自动调整桌子数（核心新功能） =======================
+// ======================= 自动调整桌子数 =======================
 function autoAdjustTables(division) {
     const aliveCount = division.players.filter(p => p.losses < 2).length;
     let targetTables = 1;
     if (aliveCount > 16) targetTables = 3;
     else if (aliveCount > 8) targetTables = 2;
+    const maxForDivision = division.maxTables || 3;
+    targetTables = Math.min(targetTables, maxForDivision);
     
     if (state.numTables !== targetTables) {
-        // 如果桌子减少，把多出桌子上的比赛放回队列
         if (targetTables < state.numTables) {
             for (let i = targetTables; i < division.tables.length; i++) {
                 if (division.tables[i].match) {
@@ -130,129 +118,8 @@ function autoAdjustTables(division) {
         state.numTables = targetTables;
         syncTablesForCurrentDivision();
         fillIdleTables(division);
-        // 自动分配裁判（如果已有分配规则）
-        if (division.refereeAssignments?.length) {
-            autoAssignRefereesForDivision(division);
-        }
         showToast(`自动调整为 ${targetTables} 张桌子 (存活${aliveCount}人)`, false);
     }
-}
-
-// ======================= 裁判管理 =======================
-function autoAssignRefereesForDivision(division) {
-    const divisionName = division.name;
-    // 筛选可用裁判：不包含该级别的限制，且不参赛
-    const available = state.referees.filter(ref => {
-        // 限制：裁判的 restrictions 数组中任一项被级别名包含即不可用
-        const restricted = ref.restrictions.some(r => divisionName.includes(r));
-        if (restricted) return false;
-        const isPlayer = division.players.some(p => p.name === ref.name);
-        return !isPlayer;
-    });
-    
-    const chiefs = available.filter(r => r.canChief);
-    const assistants = available.filter(r => !r.canChief);
-    const allAvailable = [...chiefs, ...assistants];
-    
-    const assignments = [];
-    for (let i = 0; i < state.numTables; i++) {
-        // 循环分配，尽量让主裁是可做主裁的
-        const chiefIdx = (i * 2) % allAvailable.length;
-        const assistIdx = (i * 2 + 1) % allAvailable.length;
-        assignments.push({
-            tableId: i + 1,
-            chief: allAvailable[chiefIdx]?.id || null,
-            assistant: allAvailable[assistIdx]?.id || null
-        });
-    }
-    division.refereeAssignments = assignments;
-    save();
-    refreshMatchSubViews(division);
-    showToast('裁判已自动分配');
-}
-
-// 裁判管理模态框相关
-function showRefereeModal() {
-    renderRefereeList();
-    document.getElementById('referee-modal').classList.remove('hidden');
-}
-
-function hideRefereeModal() {
-    document.getElementById('referee-modal').classList.add('hidden');
-}
-
-function renderRefereeList() {
-    const container = document.getElementById('referee-list');
-    container.innerHTML = state.referees.map(ref => `
-        <div class="bg-zinc-800 rounded-2xl p-3 flex items-center justify-between">
-            <div>
-                <span class="font-medium">${escapeHtml(ref.name)}</span>
-                <span class="text-xs ml-2 ${ref.canChief ? 'text-cyan-400' : 'text-zinc-400'}">${ref.canChief ? '可主裁' : '仅副裁'}</span>
-                ${ref.restrictions.length ? `<div class="text-xs text-amber-400 mt-1">限制：${ref.restrictions.join(', ')}</div>` : ''}
-            </div>
-            <div class="flex gap-2">
-                <button data-action="editReferee" data-id="${ref.id}" class="text-zinc-400 hover:text-white"><i class="fa-solid fa-pencil"></i></button>
-                <button data-action="deleteReferee" data-id="${ref.id}" class="text-red-400 hover:text-red-300"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>
-    `).join('');
-}
-
-function addBulkReferees() {
-    const txt = document.getElementById('referee-bulk-input').value;
-    const lines = txt.split('\n').map(s => s.trim()).filter(s => s);
-    if (lines.length === 0) { showToast('请输入裁判信息', true); return; }
-    const newReferees = [];
-    for (const line of lines) {
-        const parts = line.split(',').map(s => s.trim());
-        if (parts.length < 2) continue;
-        const name = parts[0];
-        const canChief = parts[1].toLowerCase().includes('是') || parts[1].toLowerCase() === 'true';
-        const restrictions = parts.slice(2).filter(s => s);
-        // 避免重复添加同名裁判（简单处理）
-        if (!state.referees.some(r => r.name === name)) {
-            newReferees.push({
-                id: uuid(),
-                name,
-                canChief,
-                restrictions
-            });
-        }
-    }
-    state.referees.push(...newReferees);
-    document.getElementById('referee-bulk-input').value = '';
-    save();
-    renderRefereeList();
-    showToast(`添加了 ${newReferees.length} 名裁判`);
-}
-
-function resetDefaultReferees() {
-    state.referees = DEFAULT_REFEREES.map(r => ({ ...r, id: uuid() })); // 重新生成ID
-    save();
-    renderRefereeList();
-    showToast('已重置为默认裁判名单');
-}
-
-function editReferee(id) {
-    const ref = state.referees.find(r => r.id === id);
-    if (!ref) return;
-    // 简单弹窗编辑，这里可以优化为表单，但为保持简洁使用 prompt
-    const newName = prompt('姓名', ref.name);
-    if (newName) ref.name = newName;
-    const newChief = confirm('是否可做主裁？') ? true : false;
-    ref.canChief = newChief;
-    const newRestrictions = prompt('限制级别（逗号分隔）', ref.restrictions.join(','));
-    ref.restrictions = newRestrictions.split(',').map(s => s.trim()).filter(s => s);
-    save();
-    renderRefereeList();
-    showToast('裁判信息已更新');
-}
-
-function deleteReferee(id) {
-    state.referees = state.referees.filter(r => r.id !== id);
-    save();
-    renderRefereeList();
-    showToast('裁判已删除');
 }
 
 // ======================= 核心比赛操作 =======================
@@ -261,12 +128,16 @@ function startTournament(div) {
     if (div.winners.length > 0 && !confirm('比赛已进行，重新开始将清除所有记录，是否继续？')) return false;
     
     initDoubleElimination(div);
-    autoAdjustTables(div);      // 自动设置桌子数
+    const aliveCount = div.players.filter(p => p.losses < 2).length;
+    let targetTables = 1;
+    if (aliveCount > 16) targetTables = 3;
+    else if (aliveCount > 8) targetTables = 2;
+    const maxForDivision = div.maxTables || 3;
+    targetTables = Math.min(targetTables, maxForDivision);
+    
+    state.numTables = targetTables;
+    syncTablesForCurrentDivision();
     fillIdleTables(div);
-    // 自动分配裁判（如果没有手动分配过）
-    if (!div.refereeAssignments || div.refereeAssignments.length === 0) {
-        autoAssignRefereesForDivision(div);
-    }
     save();
     renderFullView();
     showToast('比赛开始！首轮对阵已生成');
@@ -287,18 +158,18 @@ function recordMatchResult(tableId, winnerId, loserId) {
     table.match = null;
     
     fillIdleTables(div);
-    autoAdjustTables(div);      // 每次结果后重新计算桌子数
+    autoAdjustTables(div);
     save();
     refreshMatchSubViews(div);
     
     const alive = div.players.filter(p => p.losses < 2).length;
     if (alive === 8 && !top8Alerted) {
         top8Alerted = true;
-        showAlertModal('🏅 前8强诞生', '恭喜进入前8强，比赛将自动切换为单桌模式。');
+        showAlertModal('🏅 前8强诞生', '恭喜进入前8强！');
     } else if (alive === 4) {
-        showAlertModal('🔥 半决赛开启', '前4强已产生，胜者组决赛和败者组决赛即将进行。');
+        showAlertModal('🔥 半决赛开启', '前4强已产生！');
     } else if (div.finalsData && finalsStarted) {
-        showAlertModal('🏆 总决赛', `胜者组冠军 ${div.finalsData.p1Name} vs 败者组冠军 ${div.finalsData.p2Name}\n三局两胜！`);
+        showAlertModal('🏆 总决赛', `${div.finalsData.p1Name} vs ${div.finalsData.p2Name}\n三局两胜！`);
         showBo3Modal(div);
     }
 }
@@ -312,11 +183,6 @@ function undoLastMatch() {
         save();
         autoAdjustTables(div);
         refreshMatchSubViews(div);
-        const alive = div.players.filter(p => p.losses < 2).length;
-        if (alive <= 8 && state.numTables === 1 && !top8Alerted) {
-            top8Alerted = true;
-            showAlertModal('🏅 前8强诞生', '比赛已自动切换为单桌模式。');
-        }
         showToast('已撤回上一场比赛');
     }
 }
@@ -325,7 +191,6 @@ function undoSingleTable(tableId) {
     const div = getCurrentDivision();
     const table = div.tables.find(t => t.id === tableId);
     if (!table || !table.lastMatch) { showToast('该桌没有可撤回的比赛', true); return; }
-    // 简单处理：调用全局撤回并提醒（后续可优化）
     if (!div.history.length) return;
     const lastSnapshot = div.history[div.history.length - 1];
     const lastTable = lastSnapshot.tables.find(t => t.id === tableId);
@@ -360,8 +225,7 @@ function randomSeeding() {
     showToast('已随机打乱选手顺序');
 }
 
-// 删除手动设置桌子数函数，不再暴露给用户
-
+// 修复缺失的 goBack 函数
 function goBack() {
     if (state.view === 'match') {
         state.view = 'divisions';
@@ -371,18 +235,271 @@ function goBack() {
         state.view = 'tournaments';
         state.currentTournamentId = null;
         renderFullView();
+    } else if (state.view === 'multiMatch') {
+        state.view = 'divisions';
+        state.multiMatchDivisions = [];
+        renderFullView();
     }
 }
 
-function editCurrentDivisionName() {
-    const div = getCurrentDivision();
-    if (!div) return;
-    const newName = prompt('修改级别名称', div.name);
-    if (newName && newName.trim()) {
-        div.name = newName.trim();
-        save();
+// ======================= 多级别同时开始 =======================
+function enterMultiSelectMode() {
+    multiSelectMode = true;
+    selectedDivisionIds.clear();
+    renderDivisionsList();
+    showToast('请勾选要同时开始的级别');
+}
+
+function cancelMultiSelectMode() {
+    multiSelectMode = false;
+    selectedDivisionIds.clear();
+    renderDivisionsList();
+}
+
+function toggleDivisionSelection(divisionId) {
+    if (selectedDivisionIds.has(divisionId)) {
+        selectedDivisionIds.delete(divisionId);
+    } else {
+        selectedDivisionIds.add(divisionId);
+    }
+    const checkbox = document.querySelector(`[data-division-checkbox="${divisionId}"]`);
+    if (checkbox) {
+        checkbox.classList.toggle('bg-cyan-400', selectedDivisionIds.has(divisionId));
+        checkbox.classList.toggle('bg-zinc-700', !selectedDivisionIds.has(divisionId));
+    }
+    document.getElementById('selected-count').innerText = selectedDivisionIds.size;
+}
+
+function startMultiMatch() {
+    if (selectedDivisionIds.size === 0) {
+        showToast('请至少选择一个级别', true);
+        return;
+    }
+    const tour = getCurrentTournament();
+    const selectedDivs = tour.divisions.filter(d => selectedDivisionIds.has(d.id));
+    
+    for (const div of selectedDivs) {
+        if ((div.maxTables || 3) < 1) {
+            showToast(`级别“${div.name}”桌子数上限不足1`, true);
+            return;
+        }
+        if (div.winners.length === 0) {
+            initDoubleElimination(div);
+        }
+        if (div.tables.length > 1) {
+            for (let i = 1; i < div.tables.length; i++) {
+                if (div.tables[i].match) {
+                    div.matchQueue.unshift(div.tables[i].match);
+                }
+            }
+        }
+        div.tables = [{ id: 1, match: null, lastMatch: null }];
+        fillIdleTables(div);
+    }
+    
+    state.multiMatchDivisions = [...selectedDivisionIds];
+    state.view = 'multiMatch';
+    multiSelectMode = false;
+    selectedDivisionIds.clear();
+    save();
+    renderFullView();
+    showToast(`已同时开始 ${selectedDivs.length} 个级别`);
+}
+
+// 优化后的多级别视图（左右分屏）
+function renderMultiMatchView() {
+    const tour = getCurrentTournament();
+    const selectedDivs = tour.divisions.filter(d => state.multiMatchDivisions.includes(d.id));
+    if (selectedDivs.length === 0) {
+        state.view = 'divisions';
         renderFullView();
-        showToast('级别名称已更新');
+        return;
+    }
+    
+    const root = document.getElementById('app-root');
+    root.innerHTML = `
+        <div class="bg-zinc-900 rounded-3xl p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-3xl font-bold">🏟️ 多级别同时进行</h2>
+                <button data-action="exitMultiMatch" class="bg-zinc-700 hover:bg-zinc-600 px-6 py-3 rounded-3xl font-bold"><i class="fa-solid fa-arrow-left"></i> 返回级别列表</button>
+            </div>
+            <div class="flex flex-col lg:flex-row gap-6">
+                ${selectedDivs.map((div, idx) => {
+                    const table = div.tables[0];
+                    const tableNum = idx + 1;
+                    let tableContent = '';
+                    if (!table.match) {
+                        tableContent = `
+                            <div class="text-center py-6">
+                                <div class="inline-flex items-center justify-center w-16 h-16 bg-zinc-700 rounded-2xl mb-4"><i class="fa-solid fa-chair text-4xl text-zinc-400"></i></div>
+                                <p class="text-2xl font-semibold mb-1">空闲</p>
+                                <button data-action="assignMatchToTableMulti" data-division-id="${div.id}" data-table-id="1" class="bg-emerald-400 hover:bg-emerald-300 text-black font-bold py-3 px-6 rounded-3xl w-full"><i class="fa-solid fa-arrow-right"></i> 从队列取一场比赛</button>
+                                <button data-action="showManualAssignModalMulti" data-division-id="${div.id}" data-table-id="1" class="mt-2 bg-white/10 hover:bg-white/20 text-white font-bold py-3 rounded-3xl w-full">手动分配</button>
+                            </div>
+                        `;
+                    } else {
+                        const p1 = div.players.find(p => p.id === table.match.p1);
+                        const p2 = div.players.find(p => p.id === table.match.p2);
+                        if (!p1 || !p2) return '';
+                        const groupLabel = table.match.group === 'winners' ? '🏅胜者组' : '💀败者组';
+                        tableContent = `
+                            <div class="flex justify-between text-xs font-mono mb-3">
+                                <div>${groupLabel}</div>
+                                <div class="text-emerald-400">比赛中</div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <div data-action="recordMatchResultMulti" data-division-id="${div.id}" data-table-id="1" data-winner="${p1.id}" data-loser="${p2.id}" class="flex-1 text-center cursor-pointer">
+                                    <div class="player-name text-cyan-300">${escapeHtml(p1.name)}</div>
+                                    <div class="text-xs text-zinc-400">${escapeHtml(p1.pinyin)}</div>
+                                    <div class="mt-4"><button class="win-button bg-cyan-400 text-black font-black w-28 h-28 rounded-3xl mx-auto flex items-center justify-center text-2xl">胜</button></div>
+                                </div>
+                                <div class="px-6 text-4xl font-light text-zinc-600">VS</div>
+                                <div data-action="recordMatchResultMulti" data-division-id="${div.id}" data-table-id="1" data-winner="${p2.id}" data-loser="${p1.id}" class="flex-1 text-center cursor-pointer">
+                                    <div class="player-name text-amber-300">${escapeHtml(p2.name)}</div>
+                                    <div class="text-xs text-zinc-400">${escapeHtml(p2.pinyin)}</div>
+                                    <div class="mt-4"><button class="win-button bg-amber-400 text-black font-black w-28 h-28 rounded-3xl mx-auto flex items-center justify-center text-2xl">胜</button></div>
+                                </div>
+                            </div>
+                            <div class="text-center text-xs text-zinc-500 mt-6">
+                                <button data-action="undoSingleTableMulti" data-division-id="${div.id}" data-table-id="1" class="bg-zinc-800 px-4 py-2 rounded-full hover:bg-red-800"><i class="fa-solid fa-rotate-left"></i> 仅本桌撤回</button>
+                            </div>
+                        `;
+                    }
+                    return `
+                        <div class="flex-1 bg-zinc-800/40 rounded-3xl p-6 border border-zinc-700">
+                            <h3 class="text-2xl font-bold mb-4 text-center">${escapeHtml(div.name)} (桌 ${tableNum})</h3>
+                            <div class="table-card rounded-3xl p-6 ${table.match ? 'ring-2 ring-cyan-400/40' : ''}">
+                                ${tableContent}
+                            </div>
+                            <!-- 该级别选手列表简表 -->
+                            <div class="mt-4 max-h-60 overflow-y-auto text-sm">
+                                <div class="text-zinc-400 mb-2">选手 (${div.players.length}人)</div>
+                                ${div.players.slice(0, 5).map(p => `<div class="flex justify-between py-1"><span>${escapeHtml(p.name)}</span><span class="loss-${p.losses}">${p.losses}/2</span></div>`).join('')}
+                                ${div.players.length > 5 ? `<div class="text-zinc-500 text-center">...等${div.players.length}人</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
+// 多级别操作函数
+function assignMatchToTableMulti(divisionId, tableId) {
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const table = div.tables.find(t => t.id === tableId);
+    if (table.match) return;
+    const next = getNextMatch(div);
+    if (next) table.match = next;
+    else showToast(`${div.name} 无待比赛`, true);
+    save();
+    renderMultiMatchView();
+}
+
+function showManualAssignModalMulti(divisionId, tableId) {
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const available = div.players.filter(p => p.losses < 2);
+    const container = document.getElementById('manual-pool-select');
+    container.innerHTML = '';
+    manualTableId = tableId;
+    manualSelected = [];
+    window._multiManualDivisionId = divisionId;
+    available.forEach(p => {
+        const btn = document.createElement('div');
+        btn.className = 'bg-zinc-800 rounded-2xl p-3 cursor-pointer hover:bg-zinc-700 text-center';
+        btn.innerText = `${p.name} (${p.losses}负)`;
+        btn.dataset.playerId = p.id;
+        btn.addEventListener('click', () => {
+            if (manualSelected.includes(p.id)) {
+                manualSelected = manualSelected.filter(id => id !== p.id);
+                btn.classList.remove('border-cyan-400', 'border-2');
+            } else {
+                if (manualSelected.length < 2) {
+                    manualSelected.push(p.id);
+                    btn.classList.add('border-cyan-400', 'border-2');
+                }
+            }
+            document.getElementById('manual-confirm-btn').disabled = manualSelected.length !== 2;
+        });
+        container.appendChild(btn);
+    });
+    document.getElementById('manual-modal').classList.remove('hidden');
+}
+
+function confirmManualAssignMulti() {
+    if (manualSelected.length !== 2) return;
+    const divisionId = window._multiManualDivisionId;
+    if (!divisionId) return;
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const table = div.tables.find(t => t.id === manualTableId);
+    if (!table || table.match) return;
+    if (manualSelected[0] === manualSelected[1]) {
+        showToast('不能选择同一位选手', true);
+        return;
+    }
+    const match = {
+        id: uuid(),
+        p1: manualSelected[0],
+        p2: manualSelected[1],
+        group: 'winners',
+        winner: null,
+        loser: null
+    };
+    table.match = match;
+    hideManualModal();
+    save();
+    renderMultiMatchView();
+}
+
+function recordMatchResultMulti(divisionId, tableId, winnerId, loserId) {
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const table = div.tables.find(t => t.id === tableId);
+    if (!table || !table.match) return;
+    const match = table.match;
+    pushHistory(div);
+    processMatchResult(div, match, winnerId, loserId);
+    if (div.matchHistory && div.matchHistory.length > 0) {
+        div.matchHistory[0].table = `多桌-${div.name}`;
+    }
+    table.lastMatch = { winnerId, loserId, matchId: match.id };
+    table.match = null;
+    fillIdleTables(div);
+    save();
+    renderMultiMatchView();
+    // 检查是否弹出总决赛
+    if (div.finalsData) {
+        showAlertModal('🏆 总决赛', `${div.finalsData.p1Name} vs ${div.finalsData.p2Name}\n三局两胜！`);
+        showBo3Modal(div);
+    }
+}
+
+function undoSingleTableMulti(divisionId, tableId) {
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const table = div.tables.find(t => t.id === tableId);
+    if (!table || !table.lastMatch) { showToast('该桌没有可撤回的比赛', true); return; }
+    if (!div.history.length) return;
+    const lastSnapshot = div.history[div.history.length - 1];
+    const lastTable = lastSnapshot.tables.find(t => t.id === tableId);
+    if (lastTable && lastTable.match && lastTable.match.id === table.lastMatch.matchId) {
+        if (undoStore(div)) {
+            fillIdleTables(div);
+            save();
+            renderMultiMatchView();
+            showToast('已撤回');
+        }
+    } else {
+        showToast('只能撤回最近一场比赛', true);
     }
 }
 
@@ -403,8 +520,8 @@ function updateBo3UI(div) {
     document.getElementById('bo3-score-p2').innerText = div.finalsData.score2;
 }
 function bo3Win(side) {
-    const div = getCurrentDivision();
-    if (!div.finalsData) return;
+    const div = state.view === 'multiMatch' ? null : getCurrentDivision();
+    if (!div || !div.finalsData) return;
     if (side === 1) div.finalsData.score1++;
     else div.finalsData.score2++;
     updateBo3UI(div);
@@ -435,11 +552,12 @@ function bo3Win(side) {
         rankMsg += `完整排名已更新至右侧面板。`;
         showAlertModal('🏆 比赛结束', rankMsg);
         save();
-        refreshMatchSubViews(div);
+        if (state.view === 'multiMatch') renderMultiMatchView();
+        else refreshMatchSubViews(div);
     }
 }
 
-// ======================= 手动分配 =======================
+// ======================= 手动分配（单级别） =======================
 function assignMatchToTable(tableId) {
     const div = getCurrentDivision();
     const table = div.tables.find(t => t.id === tableId);
@@ -537,31 +655,35 @@ function selectTournament(id) {
 function addDivision() {
     const tour = getCurrentTournament();
     if (!tour) return;
-    const side = prompt('选择级别类型：输入“左手”或“右手”', '右手');
-    if (!side) return;
-    let defaultName = '';
-    if (side.includes('左')) defaultName = '左手75kg';
-    else if (side.includes('右')) defaultName = '右手75kg';
-    else defaultName = side + '级别';
-    const name = prompt('级别名称', defaultName);
-    if (name) {
-        tour.divisions.push({
-            id: uuid(),
-            name,
-            players: [],
-            winners: [],
-            losers: [],
-            matchQueue: [],
-            tables: [],
-            finalsData: null,
-            history: [],
-            matchHistory: [],
-            eliminatedOrder: [],
-            refereeAssignments: []
-        });
-        save();
-        renderFullView();
+    const hand = prompt('选择级别类型：输入“左手”或“右手”', '右手');
+    if (!hand) return;
+    const isLeft = hand.includes('左');
+    const weight = prompt('请输入体重（kg），例如 65', '65');
+    if (!weight) return;
+    const weightNum = parseInt(weight);
+    if (isNaN(weightNum)) {
+        showToast('请输入有效数字', true);
+        return;
     }
+    const defaultName = `${isLeft ? '左手' : '右手'}${weightNum}kg`;
+    const finalName = prompt('确认级别名称（可直接修改）', defaultName);
+    if (!finalName) return;
+    tour.divisions.push({
+        id: uuid(),
+        name: finalName.trim(),
+        players: [],
+        winners: [],
+        losers: [],
+        matchQueue: [],
+        tables: [],
+        finalsData: null,
+        history: [],
+        matchHistory: [],
+        eliminatedOrder: [],
+        maxTables: 3
+    });
+    save();
+    renderFullView();
 }
 function editDivision(id) {
     const tour = getCurrentTournament();
@@ -598,7 +720,6 @@ function clearCurrentDivision() {
         div.history = [];
         div.matchHistory = [];
         div.eliminatedOrder = [];
-        div.refereeAssignments = [];
         syncTablesForCurrentDivision();
         save();
         renderFullView();
@@ -608,7 +729,7 @@ function addBulkPlayers() {
     const div = getCurrentDivision();
     if (!div) return;
     const txt = document.getElementById('bulk-input').value;
-    let names = txt.split(/[,\n]/).map(s => s.trim()).filter(s => s);
+    let names = txt.split(/[,，\n]/).map(s => s.trim()).filter(s => s);
     if (names.length === 0) {
         showToast('请输入选手姓名', true);
         return;
@@ -649,11 +770,47 @@ function addBulkPlayers() {
     }
 }
 
+function deletePlayer(playerId) {
+    const div = getCurrentDivision();
+    if (!div) return;
+    if (div.winners.length > 0) {
+        showToast('比赛已开始，无法删除选手', true);
+        return;
+    }
+    const player = div.players.find(p => p.id === playerId);
+    if (!player) return;
+    if (!confirm(`确定要删除选手“${player.name}”吗？`)) return;
+    div.players = div.players.filter(p => p.id !== playerId);
+    save();
+    refreshMatchSubViews(div);
+    showToast(`已删除 ${player.name}`);
+}
+
+function setDivisionMaxTables(divisionId) {
+    const tour = getCurrentTournament();
+    const div = tour.divisions.find(d => d.id === divisionId);
+    if (!div) return;
+    const currentMax = div.maxTables || 3;
+    const newMax = prompt('设置该级别最大桌子数 (1-3)', currentMax);
+    if (newMax !== null) {
+        const max = parseInt(newMax);
+        if (max >= 1 && max <= 3) {
+            div.maxTables = max;
+            save();
+            renderFullView();
+            showToast(`桌子数上限已设为 ${max}`);
+        } else {
+            showToast('请输入1~3之间的数字', true);
+        }
+    }
+}
+
 // ======================= 视图渲染 =======================
 function renderFullView() {
     if (state.view === 'tournaments') renderTournamentsList();
     else if (state.view === 'divisions') renderDivisionsList();
     else if (state.view === 'match') renderMatchView();
+    else if (state.view === 'multiMatch') renderMultiMatchView();
     updateBackButton();
 }
 
@@ -695,20 +852,28 @@ function renderDivisionsList() {
     const leftDivs = [], rightDivs = [], otherDivs = [];
     tour.divisions.forEach(div => {
         const name = div.name;
-        if (name.includes('左') || name.includes('Left') || name.toLowerCase().includes('left')) leftDivs.push(div);
-        else if (name.includes('右') || name.includes('Right') || name.toLowerCase().includes('right')) rightDivs.push(div);
+        if (name.includes('左') || name.toLowerCase().includes('left')) leftDivs.push(div);
+        else if (name.includes('右') || name.toLowerCase().includes('right')) rightDivs.push(div);
         else otherDivs.push(div);
     });
     const root = document.getElementById('app-root');
     root.innerHTML = `
         <div class="bg-zinc-900 rounded-3xl p-6">
-            <div class="flex justify-between items-center mb-6">
+            <div class="flex justify-between items-center mb-6 flex-wrap gap-3">
                 <div>
                     <h2 class="text-3xl font-bold">${escapeHtml(tour.name)}</h2>
                     <p class="text-zinc-400">管理比赛级别</p>
                 </div>
-                <button data-action="addDivision" class="bg-cyan-400 text-black px-6 py-3 rounded-3xl font-bold"><i class="fa-solid fa-plus"></i> 新增级别</button>
+                <div class="flex gap-3">
+                    ${!multiSelectMode ? `<button data-action="enterMultiSelectMode" class="bg-purple-500 hover:bg-purple-400 text-white px-6 py-3 rounded-3xl font-bold"><i class="fa-solid fa-layer-group"></i> 多级别同时开始</button>` : ''}
+                    <button data-action="addDivision" class="bg-cyan-400 text-black px-6 py-3 rounded-3xl font-bold"><i class="fa-solid fa-plus"></i> 新增级别</button>
+                    ${multiSelectMode ? `<button data-action="cancelMultiSelectMode" class="bg-zinc-600 hover:bg-zinc-500 text-white px-6 py-3 rounded-3xl font-bold">取消</button>` : ''}
+                </div>
             </div>
+            ${multiSelectMode ? `<div class="mb-4 p-4 bg-zinc-800 rounded-3xl flex justify-between items-center">
+                <span class="text-lg">已选择 <span id="selected-count">0</span> 个级别</span>
+                <button data-action="startMultiMatch" class="bg-emerald-500 hover:bg-emerald-400 text-black px-8 py-3 rounded-3xl font-bold text-lg"><i class="fa-solid fa-play"></i> 开始选中级别</button>
+            </div>` : ''}
             ${leftDivs.length ? `<div class="mb-8"><h3 class="text-2xl font-semibold mb-4 flex items-center gap-2"><i class="fa-solid fa-hand-back-fist text-cyan-400"></i> 左手组</h3><div id="left-divisions-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div></div>` : ''}
             ${rightDivs.length ? `<div class="mb-8"><h3 class="text-2xl font-semibold mb-4 flex items-center gap-2"><i class="fa-solid fa-hand-peace text-amber-400"></i> 右手组</h3><div id="right-divisions-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div></div>` : ''}
             ${otherDivs.length ? `<div><h3 class="text-2xl font-semibold mb-4">其他组</h3><div id="other-divisions-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div></div>` : ''}
@@ -717,23 +882,32 @@ function renderDivisionsList() {
     const renderGroup = (containerId, divs) => {
         const container = document.getElementById(containerId);
         if (container) {
-            container.innerHTML = divs.map(d => `
-                <div class="division-card rounded-3xl p-6" data-action="selectDivision" data-id="${d.id}">
+            container.innerHTML = divs.map(d => {
+                const isSelected = selectedDivisionIds.has(d.id);
+                return `
+                <div class="division-card rounded-3xl p-6 relative ${!multiSelectMode ? 'cursor-pointer' : ''}" data-action="${multiSelectMode ? 'toggleDivisionSelection' : 'selectDivision'}" data-id="${d.id}">
+                    ${multiSelectMode ? `<div class="absolute top-4 right-4 w-6 h-6 rounded border-2 border-zinc-500 flex items-center justify-center cursor-pointer ${isSelected ? 'bg-cyan-400 border-cyan-400' : 'bg-zinc-700'}" data-division-checkbox="${d.id}">
+                        ${isSelected ? '<i class="fa-solid fa-check text-black text-xs"></i>' : ''}
+                    </div>` : ''}
                     <div class="flex justify-between items-start">
                         <h3 class="text-2xl font-bold">${escapeHtml(d.name)}</h3>
                         <div class="flex gap-2">
+                            <i class="fa-solid fa-gear text-zinc-400 hover:text-white" data-action="setMaxTables" data-id="${d.id}" title="设置桌子数上限"></i>
                             <i class="fa-solid fa-pencil text-zinc-400 hover:text-white" data-action="editDivision" data-id="${d.id}"></i>
                             <i class="fa-solid fa-trash text-red-400 hover:text-red-300" data-action="deleteDivision" data-id="${d.id}"></i>
                         </div>
                     </div>
-                    <p class="text-zinc-400 text-sm mt-2">选手：${d.players.length}人</p>
+                    <p class="text-zinc-400 text-sm mt-2">选手：${d.players.length}人 | 桌子上限：${d.maxTables || 3}</p>
                 </div>
-            `).join('');
+            `}).join('');
         }
     };
     renderGroup('left-divisions-list', leftDivs);
     renderGroup('right-divisions-list', rightDivs);
     renderGroup('other-divisions-list', otherDivs);
+    if (multiSelectMode) {
+        document.getElementById('selected-count').innerText = selectedDivisionIds.size;
+    }
 }
 
 function renderMatchView() {
@@ -743,50 +917,43 @@ function renderMatchView() {
     const root = document.getElementById('app-root');
     root.innerHTML = `
         <div class="flex flex-col lg:flex-row gap-6">
-            <!-- 左侧边栏（手机全宽，大屏固定宽度） -->
-            <div class="w-full lg:w-80 flex-shrink-0 bg-zinc-900 rounded-3xl p-4 md:p-6 h-fit">
+            <div class="w-full lg:w-80 flex-shrink-0 bg-zinc-900 rounded-3xl p-6 h-fit sticky top-24">
                 <div class="flex justify-between items-baseline mb-4">
                     <div class="flex items-center gap-2">
-                        <h2 class="text-xl md:text-2xl font-bold" id="division-name-title">${escapeHtml(div.name)}</h2>
+                        <h2 class="text-2xl font-bold" id="division-name-title">${escapeHtml(div.name)}</h2>
                         <i class="fa-solid fa-pencil text-zinc-400 hover:text-white text-sm" data-action="editCurrentDivisionName"></i>
                     </div>
-                    <div data-action="clearCurrentDivision" class="text-xs flex items-center gap-1 text-red-400"><i class="fa-solid fa-trash"></i><span class="hidden sm:inline">清空本级别</span></div>
+                    <div data-action="clearCurrentDivision" class="text-xs flex items-center gap-1 text-red-400"><i class="fa-solid fa-trash"></i>清空本级别</div>
                 </div>
                 <div class="mb-6">
-                    <p class="text-zinc-400 text-sm mb-2"><i class="fa-solid fa-clipboard"></i> 批量添加选手</p>
-                    <textarea id="bulk-input" rows="3" class="w-full bg-black border border-zinc-700 rounded-2xl px-4 py-3 text-base placeholder-zinc-500 focus:outline-none focus:border-cyan-400 resize-none" placeholder="张三&#10;李四,王五&#10;赵六"></textarea>
-                    <button data-action="addBulkPlayers" class="mt-3 w-full bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-3xl text-lg"><i class="fa-solid fa-plus"></i> 立即添加</button>
+                    <p class="text-zinc-400 text-sm mb-2"><i class="fa-solid fa-clipboard"></i> 批量添加选手（支持中英文逗号）</p>
+                    <textarea id="bulk-input" rows="4" class="w-full bg-black border border-zinc-700 rounded-2xl px-4 py-3 text-lg placeholder-zinc-500 focus:outline-none focus:border-cyan-400 resize-none" placeholder="张三&#10;李四,王五&#10;赵六"></textarea>
+                    <button data-action="addBulkPlayers" class="mt-3 w-full bg-cyan-400 hover:bg-cyan-300 text-black font-bold py-4 rounded-3xl text-lg"><i class="fa-solid fa-plus"></i>立即添加</button>
                 </div>
-                <button data-action="startTournament" class="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold py-4 rounded-3xl mb-4"><i class="fa-solid fa-play"></i> 开始比赛</button>
-                <button data-action="randomSeeding" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-shuffle"></i> 随机抽签</button>
+                <button data-action="startTournament" class="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-play"></i> 开始比赛</button>
+                <button data-action="randomSeeding" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-3xl mb-6"><i class="fa-solid fa-shuffle"></i> 随机抽签（打乱顺序）</button>
                 <div class="mb-6">
                     <div class="flex justify-between text-sm text-zinc-400 mb-3"><span>全部选手 <span id="total-players">${div.players.length}</span>人</span></div>
                     <div id="mini-players-list" class="max-h-64 overflow-y-auto space-y-2 pr-2"></div>
                 </div>
-                <div>
-                    <div class="flex justify-between text-sm text-emerald-400 mb-3"><span><i class="fa-solid fa-hourglass-half"></i> 待机选手池</span><span id="pool-count" class="bg-emerald-900 text-emerald-400 px-3 py-0.5 rounded-3xl text-xs"></span></div>
-                    <div id="pool-list" class="max-h-80 overflow-y-auto space-y-2 text-sm"></div>
-                </div>
             </div>
-            <!-- 右侧主区域 -->
-            <div class="flex-1 min-w-0">
-                <div class="flex flex-wrap justify-between items-center mb-4 gap-2">
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <h3 class="text-lg md:text-xl font-semibold">比赛桌子 <span class="text-sm font-normal text-zinc-400">(自动: ${state.numTables}桌)</span></h3>
-                        <button data-action="showHistoryModal" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded-2xl text-sm flex items-center gap-1"><i class="fa-solid fa-list-ul"></i> <span class="hidden sm:inline">比赛历史</span></button>
-                        <button data-action="autoAssignRefereesForCurrent" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-2xl text-sm flex items-center gap-1"><i class="fa-solid fa-gavel"></i> <span class="hidden sm:inline">重新分配裁判</span></button>
+            <div class="flex-1">
+                <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+                    <div class="flex items-center gap-3">
+                        <h3 class="text-xl font-semibold">比赛桌子 <span class="text-sm font-normal text-zinc-400">(当前: ${state.numTables} / 上限: ${div.maxTables || 3})</span></h3>
+                        <button data-action="showHistoryModal" class="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-2xl text-sm flex items-center gap-2"><i class="fa-solid fa-list-ul"></i> 比赛历史</button>
                     </div>
                     <div class="bg-zinc-800 rounded-2xl px-4 py-2 text-sm flex items-center gap-2">
                         <i class="fa-solid fa-chart-simple text-cyan-400"></i>
-                        <span class="hidden sm:inline">进度</span>
-                        <div class="w-20 sm:w-32 bg-zinc-700 rounded-full h-2 overflow-hidden">
+                        <span>赛程进度</span>
+                        <div class="w-32 bg-zinc-700 rounded-full h-2 overflow-hidden">
                             <div id="progress-bar" class="bg-cyan-400 h-full rounded-full" style="width: ${progress}%"></div>
                         </div>
                         <span id="progress-text" class="text-cyan-300 font-mono">${progress}%</span>
                     </div>
                 </div>
-                <div id="tables-container" class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6"></div>
-                <div class="mt-8 bg-zinc-900 rounded-3xl p-4 md:p-6">
+                <div id="tables-container" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+                <div class="mt-8 bg-zinc-900 rounded-3xl p-6">
                     <h3 class="text-lg font-semibold mb-4"><i class="fa-solid fa-trophy text-yellow-400"></i> 完整排名</h3>
                     <div id="standings-list" class="space-y-2 max-h-[400px] overflow-y-auto pr-2"></div>
                 </div>
@@ -813,21 +980,11 @@ function refreshMatchSubViews(div) {
             const card = document.createElement('div');
             card.className = `table-card rounded-3xl p-6 ${table.match ? 'ring-2 ring-cyan-400/40' : 'border border-zinc-700'}`;
             
-            // 获取裁判分配
-            const assignment = div.refereeAssignments?.find(a => a.tableId === table.id);
-            const chief = state.referees.find(r => r.id === assignment?.chief);
-            const assistant = state.referees.find(r => r.id === assignment?.assistant);
-            const chiefName = chief?.name || '待分配';
-            const assistName = assistant?.name || '待分配';
-            
             if (!table.match) {
                 card.innerHTML = `
                     <div class="text-center py-6">
                         <div class="inline-flex items-center justify-center w-16 h-16 bg-zinc-700 rounded-2xl mb-4"><i class="fa-solid fa-chair text-4xl text-zinc-400"></i></div>
                         <p class="text-2xl font-semibold mb-1">桌子 ${table.id} · 空闲</p>
-                        <div class="text-xs text-zinc-400 mb-2">
-                            👨‍⚖️ 主裁：${escapeHtml(chiefName)} ｜ 副裁：${escapeHtml(assistName)}
-                        </div>
                         <button data-action="assignMatchToTable" data-table="${table.id}" class="bg-emerald-400 hover:bg-emerald-300 text-black font-bold py-3 px-6 rounded-3xl w-full"><i class="fa-solid fa-arrow-right"></i> 从队列取一场比赛</button>
                         <button data-action="showManualAssignModal" data-table="${table.id}" class="mt-2 bg-white/10 hover:bg-white/20 text-white font-bold py-3 rounded-3xl w-full">手动分配</button>
                     </div>
@@ -839,9 +996,6 @@ function refreshMatchSubViews(div) {
                 const groupLabel = table.match.group === 'winners' ? '🏅胜者组' : '💀败者组';
                 card.innerHTML = `
                     <div class="flex justify-between text-xs font-mono mb-3"><div>桌子 ${table.id} ${groupLabel}</div><div class="text-emerald-400">比赛中</div></div>
-                    <div class="text-center text-xs text-zinc-400 mb-2">
-                        👨‍⚖️ 主裁：${escapeHtml(chiefName)} ｜ 副裁：${escapeHtml(assistName)}
-                    </div>
                     <div class="flex justify-between items-center">
                         <div data-action="recordMatchResult" data-table="${table.id}" data-winner="${p1.id}" data-loser="${p2.id}" class="flex-1 text-center cursor-pointer">
                             <div class="player-name text-cyan-300">${escapeHtml(p1.name)}</div>
@@ -862,45 +1016,28 @@ function refreshMatchSubViews(div) {
         });
     }
     
-    // 待机池
-    const activeSet = getActivePlayers(div);
-    const pool = div.players.filter(p => p.losses < 2 && !activeSet.has(p.id));
-    const poolCount = document.getElementById('pool-count');
-    if (poolCount) poolCount.innerText = `${pool.length}人`;
-    const poolContainer = document.getElementById('pool-list');
-    if (poolContainer) {
-        poolContainer.innerHTML = pool.map(p => `
-            <div class="bg-zinc-800 rounded-2xl px-4 py-3 flex justify-between items-center">
-                <div>
-                    <div class="font-medium">${escapeHtml(p.name)}</div>
-                    <div class="text-xs text-zinc-400">${escapeHtml(p.pinyin)}</div>
-                </div>
-                <div class="flex items-center gap-2">
-                    <span class="loss-${p.losses}">${p.losses}/2</span>
-                </div>
-            </div>
-        `).join('') || '<div class="text-center text-zinc-500">待机池空</div>';
-    }
-    
-    // 迷你选手列表
     const sorted = [...div.players].sort((a,b) => (a.displayRank || 999) - (b.displayRank || 999));
     const miniList = document.getElementById('mini-players-list');
     if (miniList) {
-        miniList.innerHTML = sorted.slice(0,8).map(p => `
-            <div class="flex justify-between bg-zinc-800 rounded-2xl px-4 py-3 items-center">
-                <div>
-                    <div class="font-medium">${escapeHtml(p.name)}</div>
-                    <div class="text-xs text-zinc-400">${escapeHtml(p.pinyin)}</div>
+        if (sorted.length === 0) {
+            miniList.innerHTML = '<div class="text-center text-zinc-500 py-2">暂无选手</div>';
+        } else {
+            miniList.innerHTML = sorted.map(p => `
+                <div class="flex justify-between bg-zinc-800 rounded-2xl px-4 py-3 items-center">
+                    <div class="flex-1">
+                        <div class="font-medium">${escapeHtml(p.name)}</div>
+                        <div class="text-xs text-zinc-400">${escapeHtml(p.pinyin)}</div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="loss-${Math.min(p.losses,2)}">${p.losses}/2</span>
+                        ${!div.winners.length ? `<i class="fa-solid fa-trash text-red-400 hover:text-red-300 cursor-pointer" data-action="deletePlayer" data-id="${p.id}" title="删除选手"></i>` : ''}
+                    </div>
                 </div>
-                <div class="flex items-center gap-2">
-                    <span class="loss-${Math.min(p.losses,2)}">${p.losses}/2</span>
-                </div>
-            </div>
-        `).join('');
+            `).join('');
+        }
     }
     document.getElementById('total-players').innerText = div.players.length;
     
-    // 排名面板
     const hasChampion = div.players.some(p => p.rank === 1);
     const standingsContainer = document.getElementById('standings-list');
     if (standingsContainer) {
@@ -979,6 +1116,7 @@ function handleGlobalClick(e) {
     const loser = target.dataset.loser;
     const side = target.dataset.side ? parseInt(target.dataset.side) : null;
     const closeMenu = target.dataset.closeMenu === 'true';
+    const divisionId = target.dataset.divisionId;
     
     switch (action) {
         case 'goBack': goBack(); break;
@@ -1011,20 +1149,21 @@ function handleGlobalClick(e) {
         case 'bo3Win': bo3Win(side); break;
         case 'hideBo3Modal': hideBo3Modal(); break;
         case 'editCurrentDivisionName': editCurrentDivisionName(); break;
-        // 裁判相关
-        case 'showRefereeModal': showRefereeModal(); break;
-        case 'hideRefereeModal': hideRefereeModal(); break;
-        case 'addBulkReferees': addBulkReferees(); break;
-        case 'resetDefaultReferees': resetDefaultReferees(); break;
-        case 'editReferee': editReferee(id); break;
-        case 'deleteReferee': deleteReferee(id); break;
-        case 'autoAssignRefereesForCurrent': { const div = getCurrentDivision(); if (div) autoAssignRefereesForDivision(div); } break;
+        case 'setMaxTables': setDivisionMaxTables(id); break;
+        case 'deletePlayer': deletePlayer(id); break;
+        case 'enterMultiSelectMode': enterMultiSelectMode(); break;
+        case 'cancelMultiSelectMode': cancelMultiSelectMode(); break;
+        case 'toggleDivisionSelection': toggleDivisionSelection(id); break;
+        case 'startMultiMatch': startMultiMatch(); break;
+        case 'exitMultiMatch': state.view = 'divisions'; state.multiMatchDivisions = []; renderFullView(); break;
+        case 'assignMatchToTableMulti': assignMatchToTableMulti(divisionId, tableId); break;
+        case 'showManualAssignModalMulti': showManualAssignModalMulti(divisionId, tableId); break;
+        case 'confirmManualAssignMulti': confirmManualAssignMulti(); break;
+        case 'recordMatchResultMulti': recordMatchResultMulti(divisionId, tableId, winner, loser); break;
+        case 'undoSingleTableMulti': undoSingleTableMulti(divisionId, tableId); break;
         default: break;
     }
     if (closeMenu) hideMenu();
-    if (action.startsWith('select') || action.includes('Tournament') || action.includes('Division')) {
-        e.preventDefault();
-    }
 }
 
 document.addEventListener('click', handleGlobalClick);
@@ -1034,9 +1173,7 @@ window.App = {
     hideBo3Modal,
     hideHistoryModal,
     hideManualModal,
-    hideMenu,
-    hideRefereeModal,
-    showMenu
+    hideMenu
 };
 
 // 初始化

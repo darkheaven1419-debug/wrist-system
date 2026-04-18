@@ -8,6 +8,7 @@ function removeMatchesWithPlayer(division, playerId) {
 export function initDoubleElimination(division) {
     if (!division.players.length) return false;
     let players = [...division.players];
+    // 随机打乱初始顺序
     for (let i = players.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [players[i], players[j]] = [players[j], players[i]];
@@ -26,28 +27,36 @@ export function initDoubleElimination(division) {
 
 function generateMatchesForGroup(division, group) {
     let players = group === 'winners' ? [...division.winners] : [...division.losers];
-    // 过滤掉已淘汰的（防御）
+    // 过滤掉已淘汰的
     players = players.filter(pid => {
         const p = division.players.find(p => p.id === pid);
         return p && p.losses < 2;
     });
     if (players.length < 2) return;
+
     // 随机打乱
     for (let i = players.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [players[i], players[j]] = [players[j], players[i]];
     }
-    // 轮空处理
+
+    // 处理轮空（奇数人数时）
     if (players.length % 2 === 1) {
-        const bye = players.pop();
+        const byePlayerId = players.pop(); // 取出轮空选手
+        // 关键修复：轮空选手必须留在原组，且从待比赛名单中移除（他已经“晋级”了）
         if (group === 'winners') {
-            division.winners = [bye, ...division.winners.filter(id => id !== bye)];
+            // 从 division.winners 中移除原有位置，再重新加入（保证在组内）
+            division.winners = division.winners.filter(id => id !== byePlayerId);
+            division.winners.push(byePlayerId);
         } else {
-            division.losers = [bye, ...division.losers.filter(id => id !== bye)];
+            division.losers = division.losers.filter(id => id !== byePlayerId);
+            division.losers.push(byePlayerId);
         }
-        const playerName = division.players.find(p => p.id === bye)?.name || '?';
-        showToast(`${playerName} 轮空晋级`, false);
+        const playerName = division.players.find(p => p.id === byePlayerId)?.name || '?';
+        showToast(`${playerName} 轮空直接晋级`, false);
     }
+
+    // 生成比赛（此时 players 长度为偶数）
     const matches = [];
     for (let i = 0; i < players.length; i += 2) {
         matches.push({
@@ -84,12 +93,11 @@ export function processMatchResult(division, match, winnerId, loserId) {
         division.losers = division.losers.filter(id => id !== loserId);
         if (loser.losses >= 2) {
             division.eliminatedOrder.push(loserId);
-            // 关键修复：淘汰选手后，从待比赛队列中移除所有包含该选手的比赛
             removeMatchesWithPlayer(division, loserId);
         }
     }
 
-    // 基于当前活跃选手（未淘汰）生成下一轮比赛
+    // 生成下一轮比赛
     const activeWinners = division.winners.filter(pid => {
         const p = division.players.find(p => p.id === pid);
         return p && p.losses < 2;
